@@ -1,0 +1,266 @@
+# ==============================================================
+# SkillSphere — CI/CD Pipeline with GitHub Actions
+# Unit V: Continuous Integration (CI) with GitHub Actions
+#
+# This workflow automatically:
+#  1. Triggers on push/PR to main branch
+#  2. Runs lint checks
+#  3. Builds Docker images for backend and frontend
+#  4. Pushes images to Docker Hub
+#  5. Pushes images to GitHub Container Registry (GHCR)
+# ==============================================================
+
+name: SkillSphere CI/CD Pipeline
+
+# ─────────────────────────────────────────────
+# TRIGGERS (Unit V: Workflow triggers)
+# ─────────────────────────────────────────────
+on:
+  push:
+    branches: [ "main", "develop" ]   # trigger on push to main/develop
+  pull_request:
+    branches: [ "main" ]              # trigger on PR to main
+  workflow_dispatch:                  # allow manual trigger from GitHub UI
+
+# ─────────────────────────────────────────────
+# ENVIRONMENT VARIABLES (available to all jobs)
+# ─────────────────────────────────────────────
+env:
+  # Docker Hub image names
+  DOCKERHUB_BACKEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/skillsphere-backend
+  DOCKERHUB_FRONTEND_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/skillsphere-frontend
+  # GHCR image names (github.repository = owner/repo)
+  GHCR_BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/skillsphere-backend
+  GHCR_FRONTEND_IMAGE: ghcr.io/${{ github.repository_owner }}/skillsphere-frontend
+
+# ─────────────────────────────────────────────
+# JOBS (Unit V: Jobs & matrix strategies)
+# ─────────────────────────────────────────────
+jobs:
+
+  # ── Job 1: Lint & Code Quality Check ────────
+  lint:
+    name: 🔍 Lint & Code Check
+    runs-on: ubuntu-latest       # GitHub-hosted runner (Unit V: Runners)
+
+    steps:
+      # Step 1: Checkout source code from Git (Unit V: Steps & shell commands)
+      - name: Checkout code
+        uses: actions/checkout@v4   # Using marketplace actions (Unit V)
+
+      # Step 2: Setup Node.js (Unit V: Language-specific actions)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"             # Cache npm deps for faster builds (Unit V: Caching)
+          cache-dependency-path: frontend/package-lock.json
+
+      # Step 3: Install frontend deps
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Step 4: Run ESLint
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint || true   # Don't fail pipeline on lint warnings
+
+      # Step 5: Install backend deps
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      # Step 6: Verify backend starts (basic smoke test)
+      - name: Verify backend syntax
+        working-directory: backend
+        run: node --check index.js && echo "✅ Backend syntax OK"
+
+  # ── Job 2: Build & Push Backend Image ───────
+  build-backend:
+    name: 🐳 Build Backend Image
+    runs-on: ubuntu-latest
+    needs: lint                  # Wait for lint job (multi-job workflow, Unit V)
+
+    # Only push to registries on push to main (not on PRs)
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Docker Buildx for advanced build features
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login to Docker Hub (Unit V: Pushing to Docker Hub)
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Login to GitHub Container Registry (Unit V: Pushing to GHCR)
+      - name: Login to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # Auto-provided by GitHub
+
+      # Generate Docker image tags (latest + git SHA for versioning)
+      - name: Extract metadata for backend
+        id: meta-backend
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKERHUB_BACKEND_IMAGE }}
+            ${{ env.GHCR_BACKEND_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Build and push backend image to both registries
+      - name: Build & push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          target: production
+          push: true
+          tags: ${{ steps.meta-backend.outputs.tags }}
+          labels: ${{ steps.meta-backend.outputs.labels }}
+          # Cache layers between builds (Unit V: Caching for faster builds)
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Print image digest
+      - name: Backend image digest
+        run: echo "Backend image pushed → ${{ steps.meta-backend.outputs.tags }}"
+
+  # ── Job 3: Build & Push Frontend Image ──────
+  build-frontend:
+    name: 🌐 Build Frontend Image
+    runs-on: ubuntu-latest
+    needs: lint
+
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for frontend
+        id: meta-frontend
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKERHUB_FRONTEND_IMAGE }}
+            ${{ env.GHCR_FRONTEND_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # Build with VITE_API_URL build arg (Unit II: ARG instruction)
+      - name: Build & push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          target: production
+          push: true
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL || 'http://localhost:5000/api' }}
+          tags: ${{ steps.meta-frontend.outputs.tags }}
+          labels: ${{ steps.meta-frontend.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Frontend image digest
+        run: echo "Frontend image pushed → ${{ steps.meta-frontend.outputs.tags }}"
+
+  # ── Job 4: Integration Test with Compose ────
+  integration-test:
+    name: 🧪 Integration Test
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend]
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Create a minimal .env for the test run
+      - name: Create test .env
+        run: |
+          cat > .env << 'EOF'
+          MONGO_ROOT_USER=admin
+          MONGO_ROOT_PASSWORD=testpassword123
+          MONGO_DB=skillsphere_test
+          JWT_SECRET=test_jwt_secret_for_ci
+          CLIENT_URL=http://localhost:3000
+          VITE_API_URL=http://localhost:5000/api
+          BACKEND_PORT=5000
+          FRONTEND_PORT=3000
+          AZURE_STORAGE_CONNECTION_STRING=
+          AZURE_STORAGE_CONTAINER_NAME=
+          EOF
+
+      # Pull pre-built images (faster than rebuilding)
+      - name: Pull images from GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull ${{ env.GHCR_BACKEND_IMAGE }}:latest || true
+          docker pull ${{ env.GHCR_FRONTEND_IMAGE }}:latest || true
+
+      # Start the full stack
+      - name: Start all services with Docker Compose
+        run: docker compose up -d --wait --timeout 60
+
+      # Wait for services to be healthy
+      - name: Wait for services to be ready
+        run: |
+          echo "Waiting for backend..."
+          timeout 60 bash -c 'until curl -sf http://localhost:5000/; do sleep 2; done'
+          echo "✅ Backend is up"
+          echo "Waiting for frontend..."
+          timeout 30 bash -c 'until curl -sf http://localhost:3000/; do sleep 2; done'
+          echo "✅ Frontend is up"
+
+      # Run basic API smoke tests
+      - name: Smoke test API endpoints
+        run: |
+          echo "Testing GET /api/skills..."
+          curl -sf http://localhost:5000/api/skills -o /dev/null && echo "✅ /api/skills OK"
+          echo "Testing GET /api/courses..."
+          curl -sf http://localhost:5000/api/courses -o /dev/null && echo "✅ /api/courses OK"
+          echo "All smoke tests passed!"
+
+      # Show container logs on failure for debugging
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      # Clean up
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

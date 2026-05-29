@@ -1,0 +1,26 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Build outputs
+dist/
+build/
+
+# Environment secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Uploads (runtime data)
+backend/uploads/
+
+# Docker — volumes are managed by Docker, not Git
+docker/mongo-data/

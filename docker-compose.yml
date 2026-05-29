@@ -1,0 +1,144 @@
+# ==============================================================
+# SkillSphere — Docker Compose
+# Unit III: Microservices with Docker Compose
+# Services: frontend (React/Nginx) + backend (Node/Express) + mongodb
+# ==============================================================
+
+# ─────────────────────────────────────────────
+# SERVICES — each is an isolated microservice
+# ─────────────────────────────────────────────
+services:
+
+  # ── 1. MongoDB Database ─────────────────────
+  mongodb:
+    image: mongo:7.0 # Official image from Docker Hub (Unit I: registries)
+    container_name: skillsphere-mongodb
+    restart: unless-stopped # Auto-restart policy
+
+    # Environment variables — configure MongoDB root user
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-skillsphere2024}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-skillsphere}
+
+    # Named volume for persistent data (Unit II: Docker Storage)
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+      # Seed/init script — runs on first container start
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+
+    # Internal network only — not exposed to host (security)
+    networks:
+      - skillsphere-network
+
+    # Health check — backend waits for MongoDB to be ready
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── 2. Backend API ───────────────────────────
+  backend:
+    # Build from local Dockerfile (Unit II: docker build process)
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production # Multi-stage: use only the production stage
+
+    container_name: skillsphere-backend
+    restart: unless-stopped
+
+    # Port mapping (Unit II: Port mapping between host and container)
+    # host_port:container_port
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+
+    # Environment variables injected at runtime (NOT baked into image)
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      # MongoDB connection — uses service name as hostname (Docker DNS)
+      MONGO_URI: mongodb://${MONGO_ROOT_USER:-admin}:${MONGO_ROOT_PASSWORD:-skillsphere2024}@mongodb:27017/${MONGO_DB:-skillsphere}?authSource=admin
+      JWT_SECRET: ${JWT_SECRET:-supersecretjwtkey_production_change_this}
+      CLIENT_URL: ${CLIENT_URL:-http://localhost:3000}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_STORAGE_CONTAINER_NAME: ${AZURE_STORAGE_CONTAINER_NAME:-skillsphere-uploads}
+
+    # Bind mount for uploads when Azure is not configured (Unit II: bind mounts)
+    volumes:
+      - uploads_data:/app/uploads
+
+    # Network — same network as MongoDB for service discovery
+    networks:
+      - skillsphere-network
+
+    # Service dependency — wait for MongoDB health before starting
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+    # Health check for backend
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:5000/ || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ── 3. Frontend (React + Nginx) ───────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:5000/api}
+
+    container_name: skillsphere-frontend
+    restart: unless-stopped
+
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
+    networks:
+      - skillsphere-network
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    healthcheck:
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1/ || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+# ─────────────────────────────────────────────
+# VOLUMES — persistent named volumes (Unit II: Docker Storage)
+# Managed by Docker engine, survive container restarts
+# ─────────────────────────────────────────────
+volumes:
+  mongo_data:
+    driver: local
+    name: skillsphere_mongo_data
+
+  mongo_config:
+    driver: local
+    name: skillsphere_mongo_config
+
+  uploads_data:
+    driver: local
+    name: skillsphere_uploads
+
+# ─────────────────────────────────────────────
+# NETWORKS — custom bridge network (Unit II: Bridge network)
+# Enables DNS-based service discovery between containers
+# ─────────────────────────────────────────────
+networks:
+  skillsphere-network:
+    driver: bridge
+    name: skillsphere-network

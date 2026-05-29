@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+*.env
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+

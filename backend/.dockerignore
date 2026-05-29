@@ -1,0 +1,40 @@
+# Files and directories to EXCLUDE from Docker build context
+# (Unit II — Build context & .dockerignore)
+
+# Dependency directories — never copy node_modules into image
+node_modules/
+
+# Environment files — secrets must NOT be baked into images
+.env
+.env.*
+*.env
+
+# Development logs
+logs/
+*.log
+npm-debug.log*
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+
+# Test files
+__tests__/
+*.test.js
+*.spec.js
+
+# Git history — not needed inside container
+.git/
+.gitignore
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+
+# Uploaded files (managed at runtime via volume)
+uploads/
