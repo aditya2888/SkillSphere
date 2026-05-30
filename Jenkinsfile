@@ -1,29 +1,15 @@
 pipeline {
     agent any
 
-    options {
-        timestamps()
-        disableConcurrentBuilds()
-    }
-
-    parameters {
-        string(name: 'DOCKERHUB_NAMESPACE', defaultValue: 'aditya2888', description: 'Docker Hub namespace')
-    }
-
     environment {
-        BACKEND_IMAGE = ''
-        FRONTEND_IMAGE = ''
+        BACKEND_IMAGE = "aditya2888/skillsphere-backend"
+        FRONTEND_IMAGE = "aditya2888/skillsphere-frontend"
     }
 
     stages {
 
         stage('Prepare') {
             steps {
-                script {
-                    env.BACKEND_IMAGE = "${params.DOCKERHUB_NAMESPACE}/skillsphere-backend"
-                    env.FRONTEND_IMAGE = "${params.DOCKERHUB_NAMESPACE}/skillsphere-frontend"
-                }
-
                 echo "Backend Image: ${env.BACKEND_IMAGE}"
                 echo "Frontend Image: ${env.FRONTEND_IMAGE}"
             }
@@ -47,6 +33,7 @@ pipeline {
                     bat 'npm ci'
                     bat 'npm run build'
                 }
+
             }
         }
 
@@ -54,13 +41,23 @@ pipeline {
             steps {
 
                 dir('backend') {
-                    bat "docker build -t %BACKEND_IMAGE%:%BUILD_NUMBER% -t %BACKEND_IMAGE%:latest ."
+                    bat """
+                    docker build -t ${env.BACKEND_IMAGE}:${BUILD_NUMBER} -t ${env.BACKEND_IMAGE}:latest .
+                    """
                 }
 
                 dir('frontend') {
-                    bat "docker build -t %FRONTEND_IMAGE%:%BUILD_NUMBER% -t %FRONTEND_IMAGE%:latest ."
+                    bat """
+                    docker build -t ${env.FRONTEND_IMAGE}:${BUILD_NUMBER} -t ${env.FRONTEND_IMAGE}:latest .
+                    """
                 }
 
+                bat 'docker images'
+            }
+        }
+
+        stage('Verify Docker Images') {
+            steps {
                 bat 'docker images'
             }
         }
@@ -74,6 +71,10 @@ pipeline {
 
         failure {
             echo 'Build failed. Check console output.'
+        }
+
+        always {
+            echo 'Pipeline execution finished.'
         }
     }
 }
